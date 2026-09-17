@@ -1,7 +1,6 @@
-# FUNDY v2.7 Fresh APK Project
+# FUNDY v2.79 APK Project
 
-Project Android fresh untuk FUNDY. Tidak memakai gradlew/Gradle Wrapper, sehingga GitHub Actions memasang Gradle 8.9 sendiri.
+Full Android project. Upload all files/folders to a GitHub repository, then open Actions > Build FUNDY APK > Run workflow. After success, download artifact `FUNDY-v2.79-debug-apk`.
 
-Upload ISI folder ini ke root repository GitHub. Pastikan `.github/workflows/build.yml` ikut ter-upload.
-Lalu buka Actions > Build FUNDY APK > Run workflow.
-APK ada di Artifacts dengan nama FUNDY-v2.7-debug-apk.
+App HTML: `app/src/main/assets/index.html`
+Launcher logo: generated from `fundy_logo_exact.png`.
