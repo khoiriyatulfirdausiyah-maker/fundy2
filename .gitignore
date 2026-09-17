@@ -1,11 +1,61 @@
+# ==============================
+# FUNDY Android - .gitignore
+# ==============================
+
+# Gradle
 .gradle/
-.idea/
+build/
 **/build/
+!gradle/wrapper/gradle-wrapper.jar
+
+# Local configuration
 local.properties
+
+# Android Studio / IntelliJ
+.idea/
 *.iml
+*.ipr
+*.iws
+
+# Android generated files
+.externalNativeBuild/
+.cxx/
+captures/
+
+# APK / App Bundle
 *.apk
 *.aab
+*.ap_
+
+# Signing / Keystore
 *.jks
 *.keystore
+
+# Logs
+*.log
+
+# OS files
 .DS_Store
 Thumbs.db
+desktop.ini
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.swp
+
+# Java
+*.class
+
+# Kotlin
+.kotlin/
+
+# NDK
+obj/
+
+# Google Services
+google-services.json
+
+# Misc
+.navigation/
