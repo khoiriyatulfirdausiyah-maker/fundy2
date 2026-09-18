@@ -18,12 +18,19 @@ import android.widget.Toast;
 
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
+import java.io.OutputStream;
 
 public class MainActivity extends Activity {
 
     private static final int REQUEST_IMPORT = 2001;
+    private static final int REQUEST_EXPORT = 2002;
+
     private WebView webView;
     private String pendingImportFormat = "json";
+
+    private String pendingExportFilename = null;
+    private String pendingExportMime = null;
+    private String pendingExportBase64 = null;
 
     @SuppressLint({"SetJavaScriptEnabled", "AddJavascriptInterface"})
     @Override
@@ -65,6 +72,11 @@ public class MainActivity extends Activity {
         public void pickImportFile(final String format) {
             runOnUiThread(() -> openNativeImportPicker(format));
         }
+
+        @JavascriptInterface
+        public void saveExportFile(final String filename, final String mimeType, final String base64Data) {
+            runOnUiThread(() -> openNativeExportPicker(filename, mimeType, base64Data));
+        }
     }
 
     private void openNativeImportPicker(String format) {
@@ -100,10 +112,99 @@ public class MainActivity extends Activity {
         }
     }
 
+    private void openNativeExportPicker(String filename, String mimeType, String base64Data) {
+        pendingExportFilename = (filename == null || filename.trim().isEmpty())
+                ? "FUNDY-backup"
+                : filename;
+        pendingExportMime = (mimeType == null || mimeType.trim().isEmpty())
+                ? "application/octet-stream"
+                : mimeType;
+        pendingExportBase64 = base64Data;
+
+        Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType(pendingExportMime);
+        intent.putExtra(Intent.EXTRA_TITLE, pendingExportFilename);
+
+        try {
+            startActivityForResult(intent, REQUEST_EXPORT);
+        } catch (Exception e) {
+            clearPendingExport();
+            notifyExportError("Tidak bisa membuka lokasi penyimpanan.");
+        }
+    }
+
+    private void clearPendingExport() {
+        pendingExportFilename = null;
+        pendingExportMime = null;
+        pendingExportBase64 = null;
+    }
+
+    private void notifyExportSaved(String filename) {
+        final String js = "window.onAndroidExportSaved(" + quoteJs(filename) + ");";
+        runOnUiThread(() -> {
+            if (webView != null) webView.evaluateJavascript(js, null);
+        });
+    }
+
+    private void notifyExportCancelled() {
+        runOnUiThread(() -> {
+            if (webView != null) webView.evaluateJavascript("window.onAndroidExportCancelled();", null);
+        });
+    }
+
+    private void notifyExportError(String message) {
+        final String js = "window.onAndroidExportError(" + quoteJs(message) + ");";
+        runOnUiThread(() -> {
+            if (webView != null) webView.evaluateJavascript(js, null);
+        });
+    }
+
     @Override
     @SuppressWarnings("deprecation")
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
+
+        if (requestCode == REQUEST_EXPORT) {
+            if (resultCode != RESULT_OK || data == null || data.getData() == null) {
+                clearPendingExport();
+                notifyExportCancelled();
+                return;
+            }
+
+            final Uri uri = data.getData();
+            final String filename = pendingExportFilename == null ? "FUNDY-backup" : pendingExportFilename;
+            final String base64 = pendingExportBase64;
+
+            if (base64 == null) {
+                clearPendingExport();
+                notifyExportError("Data backup kosong.");
+                return;
+            }
+
+            new Thread(() -> {
+                try {
+                    byte[] bytes = Base64.decode(base64, Base64.DEFAULT);
+                    OutputStream output = getContentResolver().openOutputStream(uri, "w");
+                    if (output == null) throw new Exception("File tidak dapat dibuat");
+
+                    try {
+                        output.write(bytes);
+                        output.flush();
+                    } finally {
+                        output.close();
+                    }
+
+                    clearPendingExport();
+                    notifyExportSaved(filename);
+                } catch (Exception e) {
+                    clearPendingExport();
+                    notifyExportError(e.getMessage() == null ? "Gagal menulis file backup." : e.getMessage());
+                }
+            }, "fundy-export").start();
+
+            return;
+        }
 
         if (requestCode != REQUEST_IMPORT || resultCode != RESULT_OK || data == null) return;
 
@@ -118,8 +219,6 @@ public class MainActivity extends Activity {
             );
         } catch (Exception ignored) {}
 
-        // Reading + Base64 conversion can be expensive for a large backup.
-        // Do it outside the UI thread so the APK does not freeze.
         final String importFormat = pendingImportFormat;
         new Thread(() -> {
             try {
