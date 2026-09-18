@@ -3,11 +3,12 @@ package com.fundy.app;
 import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.content.Intent;
+import android.database.Cursor;
 import android.net.Uri;
 import android.os.Bundle;
 import android.provider.OpenableColumns;
-import android.database.Cursor;
 import android.util.Base64;
+import android.view.View;
 import android.webkit.JavascriptInterface;
 import android.webkit.WebChromeClient;
 import android.webkit.WebSettings;
@@ -32,6 +33,12 @@ public class MainActivity extends Activity {
         webView = new WebView(this);
         setContentView(webView);
 
+        // Keep WebView rendering on the GPU. FUNDY is a local single-page app.
+        webView.setLayerType(View.LAYER_TYPE_HARDWARE, null);
+        webView.setOverScrollMode(View.OVER_SCROLL_NEVER);
+        webView.setVerticalScrollBarEnabled(false);
+        webView.setHorizontalScrollBarEnabled(false);
+
         WebSettings settings = webView.getSettings();
         settings.setJavaScriptEnabled(true);
         settings.setDomStorageEnabled(true);
@@ -40,6 +47,10 @@ public class MainActivity extends Activity {
         settings.setAllowContentAccess(true);
         settings.setUseWideViewPort(true);
         settings.setLoadWithOverviewMode(true);
+        settings.setSupportZoom(false);
+        settings.setBuiltInZoomControls(false);
+        settings.setDisplayZoomControls(false);
+        settings.setDefaultTextEncodingName("UTF-8");
         settings.setCacheMode(WebSettings.LOAD_DEFAULT);
 
         webView.addJavascriptInterface(new AndroidBridge(), "Android");
@@ -96,41 +107,61 @@ public class MainActivity extends Activity {
 
         if (requestCode != REQUEST_IMPORT || resultCode != RESULT_OK || data == null) return;
 
-        Uri uri = data.getData();
+        final Uri uri = data.getData();
         if (uri == null) return;
 
         try {
             getContentResolver().takePersistableUriPermission(
-                    uri, data.getFlags() & (Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+                    uri,
+                    data.getFlags() &
+                            (Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
             );
         } catch (Exception ignored) {}
 
-        try {
-            byte[] bytes = readAllBytes(uri);
-            String base64 = Base64.encodeToString(bytes, Base64.NO_WRAP);
-            String fileName = getFileName(uri);
+        // Reading + Base64 conversion can be expensive for a large backup.
+        // Do it outside the UI thread so the APK does not freeze.
+        final String importFormat = pendingImportFormat;
+        new Thread(() -> {
+            try {
+                byte[] bytes = readAllBytes(uri);
+                String base64 = Base64.encodeToString(bytes, Base64.NO_WRAP);
+                String fileName = getFileName(uri);
 
-            String js = "window.onAndroidImport(" +
-                    quoteJs(pendingImportFormat) + "," +
-                    quoteJs(base64) + "," +
-                    quoteJs(fileName) + ");";
+                final String js = "window.onAndroidImport(" +
+                        quoteJs(importFormat) + "," +
+                        quoteJs(base64) + "," +
+                        quoteJs(fileName) + ");";
 
-            webView.evaluateJavascript(js, null);
-        } catch (Exception e) {
-            Toast.makeText(this, "Gagal membaca file: " + e.getMessage(), Toast.LENGTH_LONG).show();
-        }
+                runOnUiThread(() -> {
+                    if (webView != null) webView.evaluateJavascript(js, null);
+                });
+            } catch (Exception e) {
+                runOnUiThread(() ->
+                        Toast.makeText(
+                                MainActivity.this,
+                                "Gagal membaca file: " + e.getMessage(),
+                                Toast.LENGTH_LONG
+                        ).show()
+                );
+            }
+        }, "fundy-import").start();
     }
 
     private byte[] readAllBytes(Uri uri) throws Exception {
         InputStream input = getContentResolver().openInputStream(uri);
         if (input == null) throw new Exception("File tidak dapat dibuka");
 
-        ByteArrayOutputStream output = new ByteArrayOutputStream();
-        byte[] buffer = new byte[8192];
-        int count;
-        while ((count = input.read(buffer)) != -1) output.write(buffer, 0, count);
-        input.close();
-        return output.toByteArray();
+        try {
+            ByteArrayOutputStream output = new ByteArrayOutputStream();
+            byte[] buffer = new byte[16384];
+            int count;
+            while ((count = input.read(buffer)) != -1) {
+                output.write(buffer, 0, count);
+            }
+            return output.toByteArray();
+        } finally {
+            input.close();
+        }
     }
 
     private String getFileName(Uri uri) {
@@ -159,9 +190,24 @@ public class MainActivity extends Activity {
     }
 
     @Override
+    protected void onPause() {
+        if (webView != null) webView.onPause();
+        super.onPause();
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        if (webView != null) webView.onResume();
+    }
+
+    @Override
     public void onBackPressed() {
-        if (webView != null && webView.canGoBack()) webView.goBack();
-        else super.onBackPressed();
+        if (webView != null && webView.canGoBack()) {
+            webView.goBack();
+        } else {
+            super.onBackPressed();
+        }
     }
 
     @Override
@@ -169,6 +215,8 @@ public class MainActivity extends Activity {
         if (webView != null) {
             webView.loadUrl("about:blank");
             webView.stopLoading();
+            webView.setWebChromeClient(null);
+            webView.setWebViewClient(null);
             webView.destroy();
             webView = null;
         }
